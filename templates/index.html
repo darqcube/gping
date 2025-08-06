@@ -1,0 +1,771 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Globalping Tangled Tree Visualizer</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        .controls {
+            margin-bottom: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        input[type="text"], input[type="range"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            min-width: 200px;
+        }
+        input[type="range"] {
+            min-width: 150px;
+            margin-left: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        #refreshButton {
+            background: #28a745;
+        }
+        #refreshButton:hover {
+            background: #218838;
+        }
+        .filter-group {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .filter-btn {
+            padding: 8px 16px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        .filter-btn:hover {
+            background: #5a6268;
+        }
+        .filter-btn.active {
+            background: #007bff;
+        }
+        .filter-btn.active:hover {
+            background: #0056b3;
+        }
+        #canvas {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background: white;
+            display: block;
+            margin: 0 auto;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .legend {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        .legend-item {
+            display: inline-block;
+            margin-right: 25px;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .legend-box {
+            display: inline-block;
+            width: 30px;
+            height: 20px;
+            border-radius: 4px;
+            margin-right: 8px;
+            vertical-align: middle;
+            border: 1px solid #ddd;
+        }
+        .legend-circle {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 5px;
+            vertical-align: middle;
+        }
+        .node {
+            cursor: pointer;
+        }
+        .link {
+            fill: none;
+        }
+        .arrow {
+            fill: none;
+            stroke-width: 2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Globalping Tangled Tree Visualizer</h1>
+        <div class="controls">
+            <div class="input-group">
+                <input type="text" id="targetInput" placeholder="Enter target (e.g., google.com, 8.8.8.8)" value="google.com">
+
+                <button id="traceButton" onclick="performTraceroute()">Start Traceroute</button>
+                <button id="refreshButton" onclick="refreshForm()">Refresh</button>
+            </div>
+            <div class="filter-group" style="margin-top: 10px;">
+                <button id="filterAll" onclick="filterRoutes('all')" class="filter-btn active">All Routes</button>
+                <button id="filterGood" onclick="filterRoutes('good')" class="filter-btn">Good Total (&lt;100ms)</button>
+                <button id="filterMedium" onclick="filterRoutes('medium')" class="filter-btn">Medium Total (100-500ms)</button>
+                <button id="filterHigh" onclick="filterRoutes('high')" class="filter-btn">High Total (&gt;500ms)</button>
+            </div>
+        </div>
+        <div id="status" class="status" style="display: none;"></div>
+        <svg id="canvas" width="1100" height="600"></svg>
+        <div class="legend">
+            <h3>Legend</h3>
+            <div class="legend-item">
+                <span class="legend-box" style="background: #e8f4fd; border-color: #2196f3;"></span>
+                Source Endpoint
+            </div>
+            <div class="legend-item">
+                <span class="legend-box" style="background: #f8f9fa; border-color: #dee2e6;"></span>
+                Network Hop
+            </div>
+            <div class="legend-item">
+                <span class="legend-box" style="background: #fff2e8; border-color: #ff9800;"></span>
+                Target Destination
+            </div>
+            <div class="legend-item">
+                <span class="legend-circle" style="background: #4caf50;"></span>
+                Good Latency (&lt;50ms)
+            </div>
+            <div class="legend-item">
+                <span class="legend-circle" style="background: #ff9800;"></span>
+                Medium Latency (50-200ms)
+            </div>
+            <div class="legend-item">
+                <span class="legend-circle" style="background: #f44336;"></span>
+                High Latency (&gt;200ms)
+            </div>
+        </div>
+    </div>
+    <script>
+        const svg = d3.select("#canvas");
+        const width = +svg.attr("width");
+        const height = +svg.attr("height");
+        const statusDiv = document.getElementById("status");
+        let currentScale = 1.0;
+        let currentData = null; // Store current traceroute data
+        let allNodes = []; // Store all nodes for filtering
+        let allLinks = []; // Store all links for filtering
+
+        function showStatus(message, type = "loading") {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = "block";
+        }
+
+        function hideStatus() {
+            statusDiv.style.display = "none";
+        }
+
+        function clearCanvas() {
+            svg.selectAll("*").remove();
+        }
+
+        function refreshForm() {
+            document.getElementById("targetInput").value = "google.com";
+            clearCanvas();
+            showStatus('Form reset. Enter a target to begin.', "loading");
+        }
+
+        function getLatencyColor(rtt) {
+            if (rtt < 50) return "#4caf50";
+            if (rtt < 200) return "#ff9800";
+            return "#f44336";
+        }
+
+        function filterRoutes(filterType) {
+            if (!currentData || allNodes.length === 0) return;
+
+            // Update button states
+            document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`filter${filterType.charAt(0).toUpperCase() + filterType.slice(1)}`).classList.add('active');
+
+            clearCanvas();
+
+            let filteredNodes = [];
+            let filteredLinks = [];
+
+            if (filterType === 'all') {
+                filteredNodes = [...allNodes];
+                filteredLinks = [...allLinks];
+            } else {
+                // Calculate cumulative latency for each path
+                const pathTotals = {};
+                
+                // Group links by path
+                allLinks.forEach(link => {
+                    const sourceNode = allNodes.find(n => n.id === link.source.id || n.id === link.source);
+                    const targetNode = allNodes.find(n => n.id === link.target.id || n.id === link.target);
+                    
+                    if (sourceNode && targetNode) {
+                        let pathId = null;
+                        
+                        if (sourceNode.type === 'source') {
+                            pathId = sourceNode.id.split('-')[1];
+                        } else if (targetNode.type === 'target') {
+                            // For links to target, find the path from the source hop
+                            const sourceHop = allNodes.find(n => n.id === link.source.id || n.id === link.source);
+                            if (sourceHop && sourceHop.type === 'hop') {
+                                pathId = sourceHop.id.split('-')[1];
+                            }
+                        } else if (sourceNode.type === 'hop') {
+                            pathId = sourceNode.id.split('-')[1];
+                        }
+                        
+                        if (pathId) {
+                            if (!pathTotals[pathId]) {
+                                pathTotals[pathId] = 0;
+                            }
+                            pathTotals[pathId] += link.rtt;
+                        }
+                    }
+                });
+
+                // Filter paths based on cumulative latency
+                const validPaths = new Set();
+                Object.keys(pathTotals).forEach(pathId => {
+                    const totalLatency = pathTotals[pathId];
+                    let includePath = false;
+                    
+                    if (filterType === 'good' && totalLatency < 100) {
+                        includePath = true;
+                    } else if (filterType === 'medium' && totalLatency >= 100 && totalLatency < 500) {
+                        includePath = true;
+                    } else if (filterType === 'high' && totalLatency >= 500) {
+                        includePath = true;
+                    }
+                    
+                    if (includePath) {
+                        validPaths.add(pathId);
+                    }
+                });
+
+                // Include all nodes from valid paths
+                allNodes.forEach(node => {
+                    if (node.type === 'target') {
+                        // Always include target
+                        filteredNodes.push(node);
+                    } else if (node.type === 'source') {
+                        const pathId = node.id.split('-')[1];
+                        if (validPaths.has(pathId)) {
+                            filteredNodes.push(node);
+                        }
+                    } else if (node.type === 'hop') {
+                        const pathId = node.id.split('-')[1];
+                        if (validPaths.has(pathId)) {
+                            filteredNodes.push(node);
+                        }
+                    }
+                });
+
+                // Include links for valid paths
+                allLinks.forEach(link => {
+                    const sourceNode = allNodes.find(n => n.id === link.source.id || n.id === link.source);
+                    const targetNode = allNodes.find(n => n.id === link.target.id || n.id === link.target);
+                    
+                    if (sourceNode && targetNode) {
+                        if (sourceNode.type === 'source') {
+                            const pathId = sourceNode.id.split('-')[1];
+                            if (validPaths.has(pathId)) {
+                                filteredLinks.push(link);
+                            }
+                        } else if (targetNode.type === 'target') {
+                            // Check if this link connects to a valid path
+                            const sourceHop = allNodes.find(n => n.id === link.source.id || n.id === link.source);
+                            if (sourceHop && sourceHop.type === 'hop') {
+                                const pathId = sourceHop.id.split('-')[1];
+                                if (validPaths.has(pathId)) {
+                                    filteredLinks.push(link);
+                                }
+                            }
+                        } else {
+                            // For hop-to-hop links, check if both nodes are in filtered nodes
+                            if (filteredNodes.some(n => n.id === sourceNode.id) && 
+                                filteredNodes.some(n => n.id === targetNode.id)) {
+                                filteredLinks.push(link);
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Recreate visualization with filtered data
+            if (filteredNodes.length > 0) {
+                createVisualization(filteredNodes, filteredLinks);
+            } else {
+                showStatus(`No routes found for ${filterType} cumulative latency`, "error");
+            }
+        }
+
+        function createVisualization(nodes, links) {
+            // Force simulation setup
+            const simulation = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links).id(d => d.id).distance(50).strength(0.8))
+                .force("charge", d3.forceManyBody().strength(-30))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .force("collision", d3.forceCollide().radius(35))
+                .force("x", d3.forceX(width / 2).strength(0.2))
+                .force("y", d3.forceY(height / 2).strength(0.1))
+                .on("tick", ticked);
+
+            // Tooltip div
+            const tooltip = d3.select("body").append("div")
+                .attr("class", "node-tooltip")
+                .style("position", "absolute")
+                .style("pointer-events", "none")
+                .style("background", "#222")
+                .style("color", "#fff")
+                .style("padding", "4px 8px")
+                .style("border-radius", "4px")
+                .style("font-size", "12px")
+                .style("opacity", 0);
+
+            // Render links
+            const link = svg.selectAll(".link")
+                .data(links)
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d => {
+                    const source = nodes.find(n => n.id === d.source.id);
+                    const target = nodes.find(n => n.id === d.target.id);
+                    return d3.linkHorizontal()({
+                        source: [source.x, source.y],
+                        target: [target.x, target.y]
+                    });
+                })
+                .attr("stroke", d => getLatencyColor(d.rtt))
+                .attr("fill", "none")
+                .attr("stroke-width", 2)
+                .attr("marker-end", "url(#arrow)")
+                .attr("stroke-dasharray", "5,5");
+
+            // Render nodes
+            const node = svg.selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+
+            node.each(function(d) {
+                const el = d3.select(this);
+                
+                if (d.type === "source") {
+                    // Update rect for source nodes
+                    el.append("rect")
+                        .attr("width", 80)
+                        .attr("height", 60)  // Increased height for source nodes
+                        .attr("x", -40)
+                        .attr("y", -30)  // Adjusted y position
+                        .attr("rx", 6)
+                        .attr("fill", "#e8f4fd")
+                        .attr("stroke", "#2196f3")
+                        .attr("stroke-width", 2);
+
+                    el.append("circle")
+                        .attr("cx", -30)
+                        .attr("cy", -20)
+                        .attr("r", 6)
+                        .attr("fill", "#2196f3");
+
+                    // Title text (Source)
+                    el.append("text")
+                        .attr("y", -15)
+                        .attr("text-anchor", "middle")
+                        .attr("font-size", "10px")
+                        .attr("font-weight", "bold")
+                        .text("Source");
+
+                    // Split source information and add each line
+                    const parts = d.label.split(', ');
+                    parts.forEach((part, i) => {
+                        el.append("text")
+                            .attr("y", i * 12)  // Spacing between lines
+                            .attr("text-anchor", "middle")
+                            .attr("font-size", "8px")
+                            .text(part);
+                    });
+                } else {
+                    // For hop and target nodes - keep existing format
+                    el.append("rect")
+                        .attr("width", 80)
+                        .attr("height", 40)
+                        .attr("x", -40)
+                        .attr("y", -20)
+                        .attr("rx", 6)
+                        .attr("fill", d.type === "target" ? "#fff2e8" : "#f8f9fa")
+                        .attr("stroke", d.type === "target" ? "#ff9800" : "#dee2e6")
+                        .attr("stroke-width", 2);
+
+                    el.append("circle")
+                        .attr("cx", -30)
+                        .attr("cy", -10)
+                        .attr("r", 6)
+                        .attr("fill", d.type === "target" ? "#ff9800" : getLatencyColor(d.rtt));
+
+                    el.append("text")
+                        .attr("y", -10)
+                        .attr("text-anchor", "middle")
+                        .attr("font-size", "10px")
+                        .attr("font-weight", "bold")
+                        .text(d.type === "target" ? "Target" : `Hop ${d.label.split(":")[0].split(" ")[1]}`);
+
+                    el.append("text")
+                        .attr("y", 5)
+                        .attr("text-anchor", "middle")
+                        .attr("font-size", "8px")
+                        .text(d.type === "hop" ? `${d.rtt.toFixed(1)}ms` : d.label.split(":")[1]?.trim() || d.label);
+                }
+            });
+
+            // Add tooltip functionality
+            node.on("mouseover", function(event, d) {
+                let ip = "";
+                if (d.type === "hop") {
+                    const match = d.label.match(/: ([^ ]+)/);
+                    ip = match ? match[1] : "Unknown IP";
+                } else if (d.type === "target") {
+                    ip = d.label || "Target";
+                } else if (d.type === "source") {
+                    ip = d.label || "Source";
+                }
+                tooltip.transition().duration(100).style("opacity", 0.95);
+                tooltip.html(ip)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 20) + "px");
+            })
+            .on("mousemove", function(event) {
+                tooltip.style("left", (event.pageX + 10) + "px")
+                       .style("top", (event.pageY - 20) + "px");
+            })
+            .on("mouseout", function() {
+                tooltip.transition().duration(100).style("opacity", 0);
+            });
+
+            function ticked() {
+                constrainNodes();
+                link.attr("d", d => {
+                    const source = nodes.find(n => n.id === d.source.id);
+                    const target = nodes.find(n => n.id === d.target.id);
+                    return d3.linkHorizontal()({
+                        source: [source.x, source.y],
+                        target: [target.x, target.y]
+                    });
+                });
+                node.attr("transform", d => `translate(${d.x},${d.y})`);
+            }
+
+            function constrainNodes() {
+                const margin = 50;
+                const lineSpacing = 120;
+                const centerY = height / 2;
+                
+                const pathGroups = {};
+                nodes.forEach(node => {
+                    if (node.type === 'source') {
+                        const pathId = node.id.split('-')[1];
+                        if (!pathGroups[pathId]) pathGroups[pathId] = [];
+                        pathGroups[pathId].push(node);
+                    }
+                });
+                
+                Object.keys(pathGroups).forEach((pathId, pathIndex) => {
+                    const pathNodes = pathGroups[pathId];
+                    const lineY = centerY + (pathIndex - Object.keys(pathGroups).length / 2) * lineSpacing;
+                    
+                    const sortedNodes = [];
+                    const sourceNode = pathNodes.find(n => n.type === 'source');
+                    const targetNode = nodes.find(n => n.type === 'target');
+                    const hopNodes = nodes.filter(n => n.type === 'hop' && n.id.includes(`-${pathId}-`));
+                    
+                    if (sourceNode) sortedNodes.push(sourceNode);
+                    sortedNodes.push(...hopNodes);
+                    if (targetNode) sortedNodes.push(targetNode);
+                    
+                    const totalWidth = sortedNodes.length * 100;
+                    const startX = (width - totalWidth) / 2;
+                    
+                    sortedNodes.forEach((node, nodeIndex) => {
+                        const targetX = startX + nodeIndex * 100;
+                        const targetY = lineY;
+                        
+                        node.x += (targetX - node.x) * 0.1;
+                        node.y += (targetY - node.y) * 0.1;
+                        
+                        if (node.x < margin) node.x = margin;
+                        if (node.x > width - margin) node.x = width - margin;
+                        if (node.y < margin) node.y = margin;
+                        if (node.y > height - margin) node.y = height - margin;
+                    });
+                });
+            }
+
+            function dragstarted(event, d) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+
+            function dragged(event, d) {
+                const margin = 50;
+                if (event.x < margin) {
+                    d.fx = d.x + (margin - event.x) * 0.1;
+                } else if (event.x > width - margin) {
+                    d.fx = d.x + (width - margin - event.x) * 0.1;
+                } else {
+                    d.fx = event.x;
+                }
+                if (event.y < margin) {
+                    d.fy = d.y + (margin - event.y) * 0.1;
+                } else if (event.y > height - margin) {
+                    d.fy = d.y + (height - margin - event.y) * 0.1;
+                } else {
+                    d.fy = event.y;
+                }
+            }
+
+            function dragended(event, d) {
+                if (!event.active) {
+                    simulation.alphaTarget(0.1);
+                }
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+        }
+
+        function visualizeTraceroute(data) {
+            clearCanvas();
+            currentData = data; // Store data for filtering
+            const results = data.results;
+            if (!results || results.length === 0) {
+                showStatus("No traceroute data to display", "error");
+                return;
+            }
+
+            const nodes = [];
+            const links = [];
+            const nodeSet = new Set();
+
+            // Add single target node
+            const targetId = "target-0";
+            if (!nodeSet.has(targetId)) {
+                nodes.push({
+                    id: targetId,
+                    label: data.target,
+                    type: "target",
+                    rtt: 0
+                });
+                nodeSet.add(targetId);
+            }
+
+            results.forEach((result, pathIndex) => {
+                const probe = result.probe;
+                const sourceId = `source-${pathIndex}`;
+                if (!nodeSet.has(sourceId)) {
+                    nodes.push({
+                        id: sourceId,
+                        label: `${probe.city || "Unknown"}, ${probe.network || "Unknown"}, AS${probe.asn || "Unknown"}`,
+                        type: "source",
+                        rtt: 0
+                    });
+                    nodeSet.add(sourceId);
+                }
+
+                let prevNode = sourceId;
+                result.hops.forEach((hop, hopIndex) => {
+                    const hopId = `hop-${pathIndex}-${hop.hop}`;
+                    if (!nodeSet.has(hopId)) {
+                        nodes.push({
+                            id: hopId,
+                            label: `Hop ${hop.hop}: ${hop.ip} (AS${hop.asn || "Unknown"})`,
+                            type: "hop",
+                            rtt: hop.rtt
+                        });
+                        nodeSet.add(hopId);
+                    }
+                    links.push({ source: prevNode, target: hopId, rtt: hop.rtt });
+                    prevNode = hopId;
+                });
+
+                // Connect last hop to single target
+                const lastHopId = `hop-${pathIndex}-${result.hops.length}`;
+                if (nodeSet.has(lastHopId)) {
+                    links.push({ source: lastHopId, target: targetId, rtt: result.hops[result.hops.length - 1]?.rtt || 0 });
+                }
+            });
+
+                        // Store all nodes and links for filtering
+            allNodes = [...nodes];
+            allLinks = [...links];
+
+            // Create the initial visualization
+            createVisualization(nodes, links);
+
+            // Add title and stats
+            svg.append("text")
+                .attr("x", width / 2)
+                .attr("y", 30)
+                .attr("text-anchor", "middle")
+                .attr("font-size", "16px")
+                .attr("font-weight", "bold")
+                .text(`Traceroute Analysis: ${data.target}`);
+
+            const totalPaths = results.length;
+            const avgHops = results.reduce((sum, r) => sum + r.hops.length, 0) / totalPaths;
+            svg.append("text")
+                .attr("x", width / 2)
+                .attr("y", 50)
+                .attr("text-anchor", "middle")
+                .attr("font-size", "12px")
+                .text(`${totalPaths} path(s) • Average ${avgHops.toFixed(1)} hops`);
+
+            showStatus(`Traceroute visualization complete for ${data.target}`, "success");
+        }
+
+        async function performTraceroute() {
+            const target = document.getElementById("targetInput").value.trim();
+            if (!target) {
+                showStatus("Please enter a target", "error");
+                return;
+            }
+            const button = document.getElementById("traceButton");
+            button.disabled = true;
+            button.textContent = "Running...";
+            showStatus("Starting traceroute measurement...", "loading");
+            try {
+                const response = await fetch("/traceroute", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ target })
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || "Failed to perform traceroute");
+                }
+                const data = await response.json();
+                visualizeTraceroute(data);
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, "error");
+                console.error("Traceroute error:", error);
+            } finally {
+                button.disabled = false;
+                button.textContent = "Start Traceroute";
+            }
+        }
+
+        document.getElementById("targetInput").addEventListener("keypress", function(e) {
+            if (e.key === "Enter") performTraceroute();
+        });
+
+        clearCanvas();
+        showStatus('Enter a target and click "Start Traceroute"', "loading");
+    </script>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'967cf76749f59d05',t:'MTc1Mzk2MzU1Mi4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
