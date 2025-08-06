@@ -1,3 +1,6 @@
+
+![Logo](./images/gping.png)
+
 # Globalping Traceroute Visualizer
 
 A web application that visualizes traceroute data using the Globalping API with an interactive D3.js visualization.
