@@ -8,8 +8,6 @@ services:
       - FLASK_APP=globalping_traceroute.py
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
-      # Add your Globalping API token here if you have one
-      # - GLOBALPING_API_TOKEN=your_api_token_here
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/"]
